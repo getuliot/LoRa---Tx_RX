@@ -1,0 +1,189 @@
+/*
+* Projeto: receptor - comunicação LoRa ponto-a-ponto
+* Autor: Pedro Bertoleti
+*/
+#include <LoRa.h>
+#include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include "BluetoothSerial.h"
+#if !defined(CONFIG_BT_ENABLED)|| !defined(CONFIG_BLUEDROID_ENABLE)
+//#error Bluetooth is not enabled! Please run 'make menuconfig' to and enable it
+#endif
+   BluetoothSerial SerialBT;
+/* Definicoes para comunicação com radio LoRa */
+#define SCK_LORA           5
+#define MISO_LORA          19
+#define MOSI_LORA          27
+#define RESET_PIN_LORA     14
+#define SS_PIN_LORA        18
+
+#define HIGH_GAIN_LORA     20  /* dBm */
+#define BAND               915E6  /* 915MHz de frequencia */
+
+/* Definicoes do OLED */
+#define OLED_SDA_PIN    4
+#define OLED_SCL_PIN    15
+#define SCREEN_WIDTH    128 
+#define SCREEN_HEIGHT   64  
+#define OLED_ADDR       0x3C 
+#define OLED_RESET      16
+
+/* Offset de linhas no display OLED */
+#define OLED_LINE1     0
+#define OLED_LINE2     10
+#define OLED_LINE3     20
+#define OLED_LINE4     30
+#define OLED_LINE5     40
+#define OLED_LINE6     50
+char Resultado[20];
+/* Definicoes gerais */
+#define DEBUG_SERIAL_BAUDRATE    115200
+
+/* Variaveis e objetos globais */
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+/* Local prototypes */
+void display_init(void);
+bool init_comunicacao_lora(void);
+
+/* Funcao: inicializa comunicacao com o display OLED
+ * Parametros: nenhnum
+ * Retorno: nenhnum
+*/ 
+void display_init(void)
+{
+    if(!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) 
+    {
+        Serial.println("[LoRa Receiver] Falha ao inicializar comunicacao com OLED");        
+    }
+    else
+    {
+        Serial.println("[LoRa Receiver] Comunicacao com OLED inicializada com sucesso");
+    
+        /* Limpa display e configura tamanho de fonte */
+        display.clearDisplay();
+        display.setTextSize(1);
+        display.setTextColor(WHITE);
+    }
+}
+
+/* Funcao: inicia comunicação com chip LoRa
+ * Parametros: nenhum
+ * Retorno: true: comunicacao ok
+ *          false: falha na comunicacao
+*/
+bool init_comunicacao_lora(void)
+{
+    bool status_init = false;
+    Serial.println("[LoRa Receiver] Tentando iniciar comunicacao com o radio LoRa...");
+    SPI.begin(SCK_LORA, MISO_LORA, MOSI_LORA, SS_PIN_LORA);
+    LoRa.setPins(SS_PIN_LORA, RESET_PIN_LORA, LORA_DEFAULT_DIO0_PIN);
+    
+    if (!LoRa.begin(BAND)) 
+    {
+        Serial.println("[LoRa Receiver] Comunicacao com o radio LoRa falhou. Nova tentativa em 1 segundo...");        
+        delay(1000);
+        status_init = false;
+    }
+    else
+    {
+        /* Configura o ganho do receptor LoRa para 20dBm, o maior ganho possível (visando maior alcance possível) */ 
+        LoRa.setTxPower(HIGH_GAIN_LORA); 
+        Serial.println("[LoRa Receiver] Comunicacao com o radio LoRa ok");
+        status_init = true;
+    }
+
+    return status_init;
+}
+
+/* Funcao de setup */
+void setup() 
+{
+  Serial.begin(9600);
+  SerialBT.begin("LoRa_Receptor");
+  Serial.println("o dispositivo foi iniciado, agora você pode iniciar o bluetooth");
+    /* Configuracao da I²C para o display OLED */
+    Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN);
+
+    /* Display init */
+    display_init();
+
+    /* Print message telling to wait */
+    display.clearDisplay();    
+    display.setCursor(0, OLED_LINE1);
+    display.print("Aguarde...\n");
+    display.display();
+    
+    Serial.begin(DEBUG_SERIAL_BAUDRATE);
+    while (!Serial);
+
+    /* Tenta, até obter sucesso, comunicacao com o chip LoRa */
+    while(init_comunicacao_lora() == false);       
+}
+
+/* Programa principal */
+void loop() 
+{
+    char byte_recebido;
+    int packet_size = 0;
+    int lora_rssi = 0;
+    long informacao_recebida = 0;
+    char * ptInformaraoRecebida = NULL;
+  
+    /* Verifica se chegou alguma informação do tamanho esperado */
+    packet_size = LoRa.parsePacket();
+    
+    if (packet_size == sizeof(informacao_recebida)) 
+    {
+        Serial.print("[LoRa Receiver] Há dados a serem lidos\n");
+        
+        /* Recebe os dados conforme protocolo */               
+        ptInformaraoRecebida = (char *)&informacao_recebida;  
+        while (LoRa.available()) 
+        {
+            byte_recebido = (char)LoRa.read();
+            *ptInformaraoRecebida = byte_recebido;
+            ptInformaraoRecebida++;
+        }
+        if(informacao_recebida==32){
+        display.println("Nivel Alto");
+        display.display();
+        SerialBT.println("Nivel Alto");
+        delay(250);
+
+        }else{
+        if(informacao_recebida==35){
+        display.println("Nivel Medio");
+        display.display();
+        SerialBT.println("Nivel Medio");
+        delay(250);
+
+        }else{
+          if(informacao_recebida==34){
+          display.println("Nivel Baixo");
+        display.display();
+        SerialBT.println("Nivel Baixo");
+        delay(250);
+        }else{
+        display.println("Vazio");
+        display.display();
+        SerialBT.println("Vazio");
+        delay(250);
+        }
+        }
+        /* Escreve RSSI de recepção e informação recebida */
+        lora_rssi = LoRa.packetRssi();
+        display.clearDisplay();   
+        display.setCursor(0, OLED_LINE1);
+        display.print("RSSI: ");
+        display.println(lora_rssi);
+        display.setCursor(0, OLED_LINE2);
+        display.print("Informacao: ");
+        display.setCursor(0, OLED_LINE3);
+       // display.println(Resultado);
+       // display.display();      
+    }
+}
+}
